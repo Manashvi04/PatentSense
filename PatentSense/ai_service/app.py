@@ -1,7 +1,26 @@
-import os
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import faiss
 import numpy as np
+
+# Helper to build FAISS index from candidate documents
+def build_faiss_index(candidates):
+    # Generate embeddings for each candidate (concatenate title, abstract, description)
+    texts = [f"{c.get('title','')} {c.get('abstract','')} {c.get('description','')}" for c in candidates]
+    if not texts:
+        return None, None
+    embeddings = model.encode(texts, convert_to_numpy=True)
+    d = embeddings.shape[1]
+    index = faiss.IndexFlatL2(d)
+    index.add(embeddings)
+    return index, embeddings
+
+# Cache to avoid rebuilding on every request (simple in‑memory cache)
+FAISS_CACHE = {
+    'candidates_hash': None,
+    'index': None,
+    'embeddings': None,
+    'candidates': None
+}
+
 
 # Load Hugging Face Sentence Transformers model dynamically if installed
 try:
@@ -50,52 +69,41 @@ def similarity():
 
     try:
         results = []
-        if MODEL_LOADED:
-            # Generate sentence embeddings
-            q_title_emb = model.encode(q_title)
-            q_abs_emb = model.encode(q_abs)
-            q_desc_emb = model.encode(q_desc)
-
-            for cand in candidates:
-                c_title = cand.get('title', '')
-                c_abs = cand.get('abstract', '')
-                c_desc = cand.get('description', '')
-
-                c_title_emb = model.encode(c_title)
-                c_abs_emb = model.encode(c_abs)
-                c_desc_emb = model.encode(c_desc)
-
-                # Compute cosine similarities for each section
-                sim_title = compute_cosine_similarity(q_title_emb, c_title_emb)
-                sim_abs = compute_cosine_similarity(q_abs_emb, c_abs_emb)
-                sim_desc = compute_cosine_similarity(q_desc_emb, c_desc_emb)
-
-                # Weighted aggregate matching score (Title: 20%, Abstract: 40%, Description: 40%)
-                overall = (sim_title * 0.20) + (sim_abs * 0.40) + (sim_desc * 0.40)
-
-                results.append({
-                    "id": cand.get('id'),
-                    "similarities": {
-                        "title": round(sim_title * 100),
-                        "abstract": round(sim_abs * 100),
-                        "description": round(sim_desc * 100),
-                        "overall": round(overall * 100)
-                    }
-                })
+        # Ensure FAISS index is up-to-date for the provided candidates
+        candidates_hash = hash(tuple(sorted([c['id'] for c in candidates])))
+        if FAISS_CACHE['candidates_hash'] != candidates_hash:
+            index, embeddings = build_faiss_index(candidates)
+            FAISS_CACHE.update({
+                'candidates_hash': candidates_hash,
+                'index': index,
+                'embeddings': embeddings,
+                'candidates': candidates
+            })
         else:
-            # Heuristic simulation mapping overlap counts if dependencies are not loaded
-            for cand in candidates:
-                # Simulating dynamic variance between documents
-                results.append({
-                    "id": cand.get('id'),
-                    "similarities": {
-                        "title": 22,
-                        "abstract": 18,
-                        "description": 14,
-                        "overall": 17
-                    }
-                })
-
+            index = FAISS_CACHE['index']
+            embeddings = FAISS_CACHE['embeddings']
+            candidates = FAISS_CACHE['candidates']
+        if not index:
+            return jsonify({"error": "No candidates to index"}), 400
+        # Compute query embedding (concatenated fields)
+        q_text = f"{q_title} {q_abs} {q_desc}"
+        q_emb = model.encode([q_text], convert_to_numpy=True)
+        # Search top K matches (e.g., 5)
+        k = min(5, len(candidates))
+        distances, indices = index.search(q_emb, k)
+        for dist, idx in zip(distances[0], indices[0]):
+            cand = candidates[idx]
+            cand_emb = embeddings[idx]
+            sim = compute_cosine_similarity(q_emb[0], cand_emb)
+            results.append({
+                "id": cand.get('id'),
+                "similarities": {
+                    "title": 0,
+                    "abstract": 0,
+                    "description": 0,
+                    "overall": round(sim * 100)
+                }
+            })
         return jsonify({"results": results})
     except Exception as e:
         print(f"AI Service Error: {str(e)}")

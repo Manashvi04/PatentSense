@@ -8,7 +8,7 @@ import Button from '../components/Button';
 import LoadingState from '../components/LoadingState';
 import EmptyState from '../components/EmptyState';
 import Toast from '../components/Toast';
-import { Plus, ExternalLink, Download, Trash2, Heart } from 'lucide-react';
+import { Plus, ExternalLink, Trash2, Heart } from 'lucide-react';
 
 export default function MyAnalyses() {
   const [reports, setReports] = useState([]);
@@ -60,11 +60,24 @@ export default function MyAnalyses() {
     return 0;
   });
 
-  const handleDelete = (id, e) => {
+  const handleDelete = async (id, e) => {
     e.preventDefault();
-    if (window.confirm("Are you sure you want to delete this patent analysis log?")) {
+    if (!window.confirm('Are you sure you want to delete this patent analysis log?')) return;
+    try {
+      await analysisAPI.deleteRecord(id);
       setReports(reports.filter(r => r.id !== id));
-      setToastMsg("Analysis record deleted.");
+      setToastMsg('Analysis record deleted.');
+    } catch (err) {
+      setToastMsg(`Error: ${err.message}`);
+    }
+  };
+
+  const handleToggleFavorite = async (id, currentFav) => {
+    try {
+      await analysisAPI.toggleFavorite(id, !currentFav);
+      setReports(reports.map(r => r.id === id ? { ...r, is_favorite: !currentFav } : r));
+    } catch (err) {
+      setToastMsg(`Error: ${err.message}`);
     }
   };
 
@@ -119,6 +132,17 @@ export default function MyAnalyses() {
               View
             </Button>
           </Link>
+          <button
+            onClick={() => handleToggleFavorite(row.id, row.is_favorite)}
+            className={`p-1.5 rounded-lg border transition-colors ${
+              row.is_favorite
+                ? 'bg-white text-black border-white'
+                : 'border-[#262626] bg-[#0A0A0A] text-[#666666] hover:text-white'
+            }`}
+            title={row.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
+          >
+            <Heart className={`w-3.5 h-3.5 ${row.is_favorite ? 'fill-current' : ''}`} />
+          </button>
           <button
             onClick={(e) => handleDelete(row.id, e)}
             className="p-1.5 rounded-lg border border-[#262626] bg-[#0A0A0A] text-[#666666] hover:text-[#EF4444] hover:border-[#EF4444]/30 transition-colors"

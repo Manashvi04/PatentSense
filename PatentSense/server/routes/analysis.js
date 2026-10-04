@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { run, get, all } = require('../db/database');
 const { authenticateToken } = require('./auth');
-const { analyzePatentNovelty } = require('../nlp/similarity');
+const axios = require('axios');
+const FLASK_URL = process.env.FLASK_URL || 'http://localhost:5001';
+const { logActivity } = require('../utils/logger');
 
 // 1. Submit a patent for analysis
 router.post('/submit', authenticateToken, async (req, res) => {
@@ -13,7 +15,38 @@ router.post('/submit', authenticateToken, async (req, res) => {
   }
 
   try {
-    const analysisResults = await analyzePatentNovelty(title, abstract, description);
+    // Fetch all reference patents to send as candidates
+    const candidates = await all('SELECT id, title, abstract, description FROM patents');
+    // Call Flask Sentence‑BERT service with query and candidates
+    const response = await axios.post(`${FLASK_URL}/api/similarity`, {
+      query: { title, abstract, description },
+      candidates
+    });
+    const { results } = response.data;
+    if (!results || results.length === 0) {
+      throw new Error('No similarity results returned from AI service');
+    }
+    // Find the best match (highest overall similarity)
+    const bestMatch = results.reduce((prev, cur) =>
+      cur.similarities.overall > prev.similarities.overall ? cur : prev,
+      results[0]
+    );
+    const noveltyScore = Math.max(0, Math.min(100, 100 - bestMatch.similarities.overall));
+    const similarityPercentage = bestMatch.similarities.overall;
+    // Placeholder AI summary – you can replace with richer generation later
+    const aiSummary = `Similarity analysis performed via Sentence‑BERT. Highest match: ${bestMatch.id} – ${bestMatch.similarities.overall}% similarity.`;
+    const analysisResults = {
+      noveltyScore,
+      similarityPercentage,
+      aiSummary,
+      closestPatent: { id: bestMatch.id },
+      topMatches: results.slice(0, 4).map(r => ({
+        id: r.id,
+        similarity: r.similarities.overall,
+        similarities: r.similarities,
+        // other fields can be added as needed
+      }))
+    };
 
     // Save to history with domain and keywords (stored as JSON array)
     const keywordsStr = keywords ? JSON.stringify(keywords) : '[]';
@@ -39,6 +72,8 @@ router.post('/submit', authenticateToken, async (req, res) => {
       JSON.stringify(analysisResults.topMatches)
     ]);
 
+    await logActivity('INFO', `Patent analysis submitted: "${title}" — Novelty Score: ${analysisResults.noveltyScore}%`, req.user.id);
+
     res.status(201).json({
       id: result.id,
       ...analysisResults,
@@ -47,6 +82,7 @@ router.post('/submit', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error analyzing patent:', error);
+    await logActivity('ERROR', `Analysis submission failed for user ${req.user.id}: ${error.message}`, req.user.id);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
@@ -106,6 +142,7 @@ router.delete('/history/:id', authenticateToken, async (req, res) => {
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Record not found or unauthorized' });
     }
+    await logActivity('INFO', `Analysis record ID ${req.params.id} deleted by user ${req.user.id}.`, req.user.id);
     res.json({ success: true, message: 'Report deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete report.' });
@@ -192,6 +229,41 @@ router.get('/stats', authenticateToken, async (req, res) => {
       LIMIT 5
     `, [userId]);
 
+    // Monthly trend (scans per day for last 30 days)
+    const monthlyTrend = await all(`
+      SELECT DATE(created_at) as date, COUNT(*) as count
+      FROM analysis_history
+      WHERE user_id = ? AND created_at >= DATE('now', '-29 days')
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC
+    `, [userId]);
+
+    // Weekly trend (scans per day for last 7 days)
+    const weeklyTrend = await all(`
+      SELECT DATE(created_at) as date, COUNT(*) as count
+      FROM analysis_history
+      WHERE user_id = ? AND created_at >= DATE('now', '-6 days')
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC
+    `, [userId]);
+
+    // Build day map helper
+    const buildDayMap = (rows, days, labelFormat) => {
+      const map = {};
+      rows.forEach(r => { map[r.date] = r.count; });
+      const result = [];
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = d.toISOString().split('T')[0];
+        const label = labelFormat === 'week'
+          ? d.toLocaleDateString('en-US', { weekday: 'short' })
+          : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        result.push({ label, value: map[key] || 0 });
+      }
+      return result;
+    };
+
     res.json({
       totalScans: countRow.totalScans || 0,
       avgNovelty: avgRow.avgNovelty ? Math.round(avgRow.avgNovelty) : 0,
@@ -202,7 +274,9 @@ router.get('/stats', authenticateToken, async (req, res) => {
         low: distRows[0].lowCount || 0
       },
       categories: categoryRows,
-      recentScans
+      recentScans,
+      weeklyTrend: buildDayMap(weeklyTrend, 7, 'week'),
+      monthlyTrend: buildDayMap(monthlyTrend, 30, 'month')
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
@@ -234,6 +308,44 @@ router.get('/patents', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error searching patents:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// 8. Similarity search endpoint (used by SimilaritySearch workspace)
+router.post('/similarity', authenticateToken, async (req, res) => {
+  const { query } = req.body;
+  if (!query) {
+    return res.status(400).json({ error: 'Query text is required.' });
+  }
+  try {
+    // Fetch reference patents with needed fields
+    const candidates = await all(`
+      SELECT id, patent_number, title, abstract, description, technology, publication_date
+      FROM patents
+    `);
+    // Call Flask service with query (as title) and candidates
+    const response = await axios.post(`${FLASK_URL}/api/similarity`, {
+      query: { title: query, abstract: '', description: '' },
+      candidates
+    });
+    const { results } = response.data;
+    // Map results to include extra fields from candidates
+    const enriched = results.map(r => {
+      const cand = candidates.find(c => c.id === r.id) || {};
+      return {
+        id: r.id,
+        patent_number: cand.patent_number,
+        title: cand.title,
+        technology: cand.technology,
+        publication_date: cand.publication_date,
+        similarity: r.similarities.overall,
+        matching_concepts: [] // placeholder
+      };
+    });
+    res.json({ results: enriched });
+  } catch (err) {
+    console.error('Similarity search error:', err);
+    res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 

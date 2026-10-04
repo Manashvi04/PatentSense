@@ -134,10 +134,111 @@ async function seedDatabase() {
   }
 }
 
+// Additional dummy data: users, saved patents, analysis history
+const bcrypt = require('bcryptjs');
+const usersToSeed = [
+  {
+    email: 'admin@example.com',
+    password_hash: bcrypt.hashSync('admin123', 10),
+    full_name: 'Admin User',
+    role: 'admin',
+    organization: 'PatentSense Corp',
+    research_interests: 'AI, Blockchain',
+    theme: 'dark',
+    notifications: 1,
+    language: 'en'
+  },
+  {
+    email: 'user1@example.com',
+    password_hash: bcrypt.hashSync('user1234', 10),
+    full_name: 'John Doe',
+    role: 'user',
+    organization: 'Tech Labs',
+    research_interests: 'Green Energy',
+    theme: 'dark',
+    notifications: 1,
+    language: 'en'
+  }
+];
+
+async function seedAdditionalData() {
+  // Seed users
+  for (const u of usersToSeed) {
+    await run(`
+      INSERT OR IGNORE INTO users (email, password_hash, full_name, role, organization, research_interests, theme, notifications, language)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [u.email, u.password_hash, u.full_name, u.role, u.organization, u.research_interests, u.theme, u.notifications, u.language]);
+  }
+
+  // Get a user id for sample relations
+  const admin = await get('SELECT id FROM users WHERE email = ?', ['admin@example.com']);
+  const user1 = await get('SELECT id FROM users WHERE email = ?', ['user1@example.com']);
+
+  // Seed saved patents for user1 (use first two patents)
+  const patent1 = await get('SELECT id FROM patents WHERE patent_number = ?', ['US-11048956-B2']);
+  const patent2 = await get('SELECT id FROM patents WHERE patent_number = ?', ['US-11589412-B1']);
+  if (patent1 && patent2) {
+    await run('INSERT OR IGNORE INTO saved_patents (user_id, patent_id) VALUES (?, ?)', [user1.id, patent1.id]);
+    await run('INSERT OR IGNORE INTO saved_patents (user_id, patent_id) VALUES (?, ?)', [user1.id, patent2.id]);
+  }
+
+  // Seed analysis_history for user1 (dummy analysis)
+  await run(`
+    INSERT INTO analysis_history (user_id, title, abstract, description, technology_domain, keywords, novelty_score, similarity_percentage, ai_summary, raw_results_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    user1.id,
+    'Sample AI Patent Analysis',
+    'Analyzing AI novelty.',
+    'Detailed description of AI patent analysis.',
+    'Artificial Intelligence',
+    'AI, Machine Learning',
+    85,
+    70,
+    'Generated summary placeholder',
+    JSON.stringify({})
+  ]);
+
+}
+
+// Extend main seed function
+async function seedDatabase() {
+  try {
+    // Existing patent seeding logic
+    const countRow = await get("SELECT COUNT(*) as count FROM patents");
+    if (countRow.count > 0) {
+      console.log(`Database already seeded with ${countRow.count} patents. Skipping patent seeding.`);
+    } else {
+      console.log("Seeding database with default reference patents...");
+      for (const patent of patentsToSeed) {
+        await run(`
+          INSERT INTO patents (patent_number, title, abstract, description, inventors, assignee, filing_date, category)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          patent.patent_number,
+          patent.title,
+          patent.abstract,
+          patent.description,
+          patent.inventors,
+          patent.assignee,
+          patent.filing_date,
+          patent.category
+        ]);
+      }
+      console.log("Successfully seeded patents.");
+    }
+
+    // Seed additional dummy data
+    console.log("Seeding dummy users, saved patents, and analysis history...");
+    await seedAdditionalData();
+    console.log("Dummy data seeding complete.");
+  } catch (error) {
+    console.error("Error seeding database:", error);
+  }
+}
+
 // If run directly
 if (require.main === module) {
-  // Let's open the db connection in the database file and run seed
-  // Wait a small timeout to let the DB connect
   setTimeout(async () => {
     await seedDatabase();
     process.exit(0);
@@ -145,3 +246,4 @@ if (require.main === module) {
 }
 
 module.exports = { seedDatabase };
+

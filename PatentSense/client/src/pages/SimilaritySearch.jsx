@@ -6,49 +6,26 @@ import Badge from '../components/Badge';
 import DataTable from '../components/DataTable';
 import { Search, Layers, Sparkles, ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
-
+import { analysisAPI } from '../utils/api';
 export default function SimilaritySearch() {
   const [query, setQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [results, setResults] = useState(null);
 
-  const handleSearch = (e) => {
+  const handleSearch = async (e) => {
     e.preventDefault();
     if (!query.trim()) return;
 
     setIsSearching(true);
-    setTimeout(() => {
-      setResults([
-        {
-          id: "pat-1",
-          patent_number: "US12345678",
-          title: "Neural Network Volumetric Medical Diagnostic System",
-          similarity: 84,
-          technology: "AI / Healthcare",
-          publication_date: "2025-08-10",
-          matching_concepts: ["Neural network processor", "Volumetric medical scans", "Diagnostic probability map"]
-        },
-        {
-          id: "pat-2",
-          patent_number: "US98765432",
-          title: "Optical Sensor Tomography Array",
-          similarity: 42,
-          technology: "Biomedical Devices",
-          publication_date: "2024-11-20",
-          matching_concepts: ["Optical sensor array", "Tomography reconstruction"]
-        },
-        {
-          id: "pat-3",
-          patent_number: "US11223344",
-          title: "Deep Learning Signal Synthesizer",
-          similarity: 28,
-          technology: "Machine Learning",
-          publication_date: "2023-05-14",
-          matching_concepts: ["Deep learning synthesizer"]
-        }
-      ]);
+    try {
+      const data = await analysisAPI.searchSimilar(query);
+      setResults(data);
+    } catch (err) {
+      console.error('Search error:', err);
+      setResults([]);
+    } finally {
       setIsSearching(false);
-    }, 600);
+    }
   };
 
   const columns = [

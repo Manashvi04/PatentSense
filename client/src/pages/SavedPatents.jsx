@@ -1,38 +1,42 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { savedPatentsAPI } from '../utils/api';
 import DataTable from '../components/DataTable';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
 import EmptyState from '../components/EmptyState';
+import LoadingState from '../components/LoadingState';
 import Toast from '../components/Toast';
-import { Bookmark, Eye, Trash2, Plus } from 'lucide-react';
+import { Bookmark, Eye, Trash2 } from 'lucide-react';
 
 export default function SavedPatents() {
-  const [savedPatents, setSavedPatents] = useState([
-    {
-      id: "pat-101",
-      patent_number: "US-11928401-B2",
-      title: "Deep Learning Medical Tomography Diagnostic System",
-      category: "Artificial Intelligence",
-      saved_date: "2026-08-10",
-      novelty: 89,
-      similarity: 11
-    },
-    {
-      id: "pat-102",
-      patent_number: "US-12049281-A1",
-      title: "Solid-State Electrolyte Battery Separator Layer",
-      category: "Green Energy & CleanTech",
-      saved_date: "2026-08-12",
-      novelty: 94,
-      similarity: 6
-    }
-  ]);
+  const [savedPatents, setSavedPatents] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [toastMsg, setToastMsg] = useState('');
 
-  const handleRemove = (id) => {
-    setSavedPatents(savedPatents.filter(p => p.id !== id));
-    setToastMsg("Patent removed from saved list.");
+  useEffect(() => {
+    async function loadSaved() {
+      try {
+        const data = await savedPatentsAPI.getAll();
+        setSavedPatents(data || []);
+      } catch (err) {
+        console.error('Failed to load saved patents:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadSaved();
+  }, []);
+
+  const handleRemove = async (patentId) => {
+    if (!window.confirm('Remove this patent from your saved library?')) return;
+    try {
+      await savedPatentsAPI.remove(patentId);
+      setSavedPatents(savedPatents.filter(p => p.id !== patentId));
+      setToastMsg('Patent removed from saved list.');
+    } catch (err) {
+      setToastMsg(`Error: ${err.message}`);
+    }
   };
 
   const columns = [
@@ -50,15 +54,15 @@ export default function SavedPatents() {
       accessor: (row) => <span className="text-xs text-[#A3A3A3]">{row.category}</span>
     },
     {
-      header: 'Saved Date',
-      accessor: (row) => <span className="text-xs text-[#666666]">{row.saved_date}</span>
+      header: 'Assignee',
+      accessor: (row) => <span className="text-xs text-[#A3A3A3]">{row.assignee || '—'}</span>
     },
     {
-      header: 'Novelty Score',
+      header: 'Saved Date',
       accessor: (row) => (
-        <Badge variant={row.novelty >= 75 ? 'highNovelty' : 'mediumNovelty'}>
-          {row.novelty}%
-        </Badge>
+        <span className="text-xs text-[#666666]">
+          {row.saved_at ? new Date(row.saved_at).toLocaleDateString() : '—'}
+        </span>
       )
     },
     {
@@ -83,14 +87,29 @@ export default function SavedPatents() {
     }
   ];
 
+  if (loading) {
+    return (
+      <div className="flex-1 p-8 bg-[#000000] text-[#D4D4D4] max-w-7xl mx-auto w-full">
+        <LoadingState type="table" count={4} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 p-8 bg-[#000000] text-[#D4D4D4] overflow-y-auto max-w-7xl mx-auto w-full space-y-8 select-none">
       <Toast message={toastMsg} type="info" onClose={() => setToastMsg('')} />
 
       {/* Header */}
-      <div className="border-b border-[#262626] pb-6">
-        <h1 className="font-display font-extrabold text-3xl text-white tracking-tight">Saved Patents</h1>
-        <p className="text-xs text-[#A3A3A3] mt-1">Bookmarked prior art references and saved analysis reports.</p>
+      <div className="border-b border-[#262626] pb-6 flex justify-between items-center flex-wrap gap-4">
+        <div>
+          <h1 className="font-display font-extrabold text-3xl text-white tracking-tight">Saved Patents</h1>
+          <p className="text-xs text-[#A3A3A3] mt-1">Bookmarked prior art references and saved analysis reports. ({savedPatents.length} saved)</p>
+        </div>
+        <Link to="/patent-library">
+          <Button variant="secondary" size="md" icon={Bookmark}>
+            Browse Library
+          </Button>
+        </Link>
       </div>
 
       {savedPatents.length === 0 ? (

@@ -3,6 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { run, get } = require('../db/database');
+const { logActivity } = require('../utils/logger');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'patentsense-secret-key-12345';
 
@@ -56,6 +57,8 @@ router.post('/register', async (req, res) => {
       preferences: { theme: 'dark', notifications: true, language: 'en' }
     };
 
+    await logActivity('INFO', `New user registered: ${email} (role: ${role})`, result.id);
+
     const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '24h' });
 
     res.status(201).json({
@@ -100,6 +103,8 @@ router.post('/login', async (req, res) => {
         language: user.language || 'en'
       }
     };
+
+    await logActivity('INFO', `User authenticated: ${user.email}`, user.id);
 
     const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '24h' });
 

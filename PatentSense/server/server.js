@@ -4,7 +4,8 @@ const path = require('path');
 const { seedDatabase } = require('./db/seed');
 const authRoutes = require('./routes/auth').router;
 const analysisRoutes = require('./routes/analysis');
-const adminRoutes = require('./routes/admin');
+const { router: adminRoutes } = require('./routes/admin');
+const savedPatentsRoutes = require('./routes/savedPatents');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -17,6 +18,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/analysis', analysisRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/saved-patents', savedPatentsRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

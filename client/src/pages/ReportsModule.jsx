@@ -6,6 +6,7 @@ import Badge from '../components/Badge';
 import Button from '../components/Button';
 import SearchBar from '../components/SearchBar';
 import LoadingState from '../components/LoadingState';
+import EmptyState from '../components/EmptyState';
 import Toast from '../components/Toast';
 import { FileText, Download, Share2, Eye, Trash2 } from 'lucide-react';
 
@@ -31,14 +32,18 @@ export default function ReportsModule() {
 
   const handleShare = (id) => {
     navigator.clipboard.writeText(`${window.location.origin}/analysis/${id}`);
-    setToastMsg("Report URL copied to clipboard.");
+    setToastMsg('Report URL copied to clipboard.');
   };
 
-  const handleDelete = (id, e) => {
+  const handleDelete = async (id, e) => {
     e.preventDefault();
-    if (window.confirm("Are you sure you want to delete this report?")) {
+    if (!window.confirm('Are you sure you want to delete this report?')) return;
+    try {
+      await analysisAPI.deleteRecord(id);
       setReports(reports.filter(r => r.id !== id));
-      setToastMsg("Report deleted.");
+      setToastMsg('Report deleted.');
+    } catch (err) {
+      setToastMsg(`Error: ${err.message}`);
     }
   };
 
@@ -46,33 +51,6 @@ export default function ReportsModule() {
     r.title.toLowerCase().includes(search.toLowerCase()) ||
     (r.technology_domain && r.technology_domain.toLowerCase().includes(search.toLowerCase()))
   );
-
-  const sampleReports = filteredReports.length > 0 ? filteredReports : [
-    {
-      id: "scan-101",
-      title: "AI-Based Medical Imaging Diagnostic System",
-      technology_domain: "AI / Healthcare",
-      novelty_score: 91,
-      status: "Completed",
-      created_at: "2026-08-14T10:00:00Z"
-    },
-    {
-      id: "scan-102",
-      title: "Smart Traffic Prediction Platform",
-      technology_domain: "AI / Transportation",
-      novelty_score: 78,
-      status: "Completed",
-      created_at: "2026-08-13T14:30:00Z"
-    },
-    {
-      id: "scan-103",
-      title: "Blockchain Authentication Method",
-      technology_domain: "Blockchain / Cyber Security",
-      novelty_score: 84,
-      status: "Completed",
-      created_at: "2026-08-12T09:15:00Z"
-    }
-  ];
 
   const columns = [
     {
@@ -163,11 +141,21 @@ export default function ReportsModule() {
         placeholder="Filter reports by title or domain..."
       />
 
-      <DataTable
-        columns={columns}
-        data={sampleReports}
-        emptyMessage="No reports found."
-      />
+      {filteredReports.length === 0 ? (
+        <EmptyState
+          title={search ? "No reports match your search" : "No reports yet"}
+          description={search ? "Try different keywords." : "Submit a patent analysis to generate your first report."}
+          actionLabel={search ? "Clear Search" : "+ New Analysis"}
+          onAction={search ? () => setSearch('') : () => window.location.href = '/new-analysis'}
+          icon={FileText}
+        />
+      ) : (
+        <DataTable
+          columns={columns}
+          data={filteredReports}
+          emptyMessage="No reports found."
+        />
+      )}
     </div>
   );
 }

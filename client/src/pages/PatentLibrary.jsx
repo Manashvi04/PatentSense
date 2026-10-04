@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { analysisAPI } from '../utils/api';
+import { analysisAPI, savedPatentsAPI } from '../utils/api';
 import SearchBar from '../components/SearchBar';
 import DataTable from '../components/DataTable';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
 import LoadingState from '../components/LoadingState';
+import EmptyState from '../components/EmptyState';
 import Toast from '../components/Toast';
-import { BookOpen, Bookmark, Eye, Layers, Sparkles } from 'lucide-react';
+import { BookOpen, Bookmark, Eye, Sparkles } from 'lucide-react';
 
 export default function PatentLibrary() {
   const [searchParams] = useSearchParams();
@@ -17,16 +18,23 @@ export default function PatentLibrary() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(initialSearch);
   const [selectedDomain, setSelectedDomain] = useState('');
-  const [savedIds, setSavedIds] = useState([]);
+  const [savedIds, setSavedIds] = useState(new Set());
   const [toastMsg, setToastMsg] = useState('');
 
+  // Load patents and saved-status
   useEffect(() => {
     async function loadLibrary() {
+      setLoading(true);
       try {
-        const data = await analysisAPI.getPatents(search, selectedDomain);
-        setPatents(data || []);
+        const [patentsData, savedData] = await Promise.all([
+          analysisAPI.getPatents(search, selectedDomain),
+          savedPatentsAPI.getAll()
+        ]);
+        setPatents(patentsData || []);
+        // Build a Set of saved patent IDs for O(1) lookup
+        setSavedIds(new Set((savedData || []).map(p => p.id)));
       } catch (err) {
-        console.error("Library fetch error:", err);
+        console.error('Library fetch error:', err);
       } finally {
         setLoading(false);
       }
@@ -34,54 +42,26 @@ export default function PatentLibrary() {
     loadLibrary();
   }, [search, selectedDomain]);
 
-  const toggleSavePatent = (id) => {
-    if (savedIds.includes(id)) {
-      setSavedIds(savedIds.filter(item => item !== id));
-      setToastMsg("Patent removed from saved library.");
-    } else {
-      setSavedIds([...savedIds, id]);
-      setToastMsg("Patent saved to library.");
+  const toggleSavePatent = async (patent) => {
+    const isSaved = savedIds.has(patent.id);
+    try {
+      if (isSaved) {
+        await savedPatentsAPI.remove(patent.id);
+        setSavedIds(prev => {
+          const next = new Set(prev);
+          next.delete(patent.id);
+          return next;
+        });
+        setToastMsg('Patent removed from saved library.');
+      } else {
+        await savedPatentsAPI.save(patent.id);
+        setSavedIds(prev => new Set([...prev, patent.id]));
+        setToastMsg('Patent saved to library.');
+      }
+    } catch (err) {
+      setToastMsg(`Error: ${err.message}`);
     }
   };
-
-  const samplePatents = patents.length > 0 ? patents : [
-    {
-      id: "pat-1",
-      patent_number: "US-11928401-B2",
-      title: "Deep Learning Medical Tomography Diagnostic System",
-      category: "Artificial Intelligence",
-      filing_date: "2024-02-18",
-      novelty: 89,
-      similarity: 11
-    },
-    {
-      id: "pat-2",
-      patent_number: "US-10829102-B1",
-      title: "Autonomous Vehicular Sensor Fusion Strategy",
-      category: "Robotics & Automation",
-      filing_date: "2023-11-04",
-      novelty: 76,
-      similarity: 24
-    },
-    {
-      id: "pat-3",
-      patent_number: "US-12049281-A1",
-      title: "Solid-State Electrolyte Battery Separator Layer",
-      category: "Green Energy & CleanTech",
-      filing_date: "2025-01-12",
-      novelty: 94,
-      similarity: 6
-    },
-    {
-      id: "pat-4",
-      patent_number: "US-10492819-B2",
-      title: "Decentralized Zero-Knowledge Cryptographic Protocol",
-      category: "Blockchain & Cyber Security",
-      filing_date: "2024-08-30",
-      novelty: 82,
-      similarity: 18
-    }
-  ];
 
   const columns = [
     {
@@ -102,12 +82,8 @@ export default function PatentLibrary() {
       accessor: (row) => <span className="text-xs text-[#666666]">{row.filing_date}</span>
     },
     {
-      header: 'Novelty Rating',
-      accessor: (row) => (
-        <Badge variant={row.novelty >= 75 ? 'highNovelty' : 'mediumNovelty'}>
-          {row.novelty}%
-        </Badge>
-      )
+      header: 'Assignee',
+      accessor: (row) => <span className="text-xs text-[#A3A3A3]">{row.assignee || '—'}</span>
     },
     {
       header: 'Actions',
@@ -125,15 +101,15 @@ export default function PatentLibrary() {
             </Button>
           </Link>
           <button
-            onClick={() => toggleSavePatent(row.id)}
+            onClick={() => toggleSavePatent(row)}
             className={`p-2 rounded-xl border transition-colors ${
-              savedIds.includes(row.id)
+              savedIds.has(row.id)
                 ? 'bg-white text-black border-white'
                 : 'border-[#262626] bg-[#0A0A0A] text-[#666666] hover:text-white'
             }`}
-            title="Save Patent"
+            title={savedIds.has(row.id) ? 'Remove from saved' : 'Save Patent'}
           >
-            <Bookmark className="w-3.5 h-3.5" />
+            <Bookmark className={`w-3.5 h-3.5 ${savedIds.has(row.id) ? 'fill-current' : ''}`} />
           </button>
         </div>
       )
@@ -175,16 +151,27 @@ export default function PatentLibrary() {
             <option value="Biotechnology & Healthcare">Biotechnology & Healthcare</option>
             <option value="Green Energy & CleanTech">Green Energy & CleanTech</option>
             <option value="Robotics & Automation">Robotics & Automation</option>
+            <option value="Blockchain & Cyber Security">Blockchain & Cyber Security</option>
           </select>
         }
       />
 
       {/* Table */}
-      <DataTable
-        columns={columns}
-        data={samplePatents}
-        emptyMessage="No patent publications found matching query."
-      />
+      {patents.length === 0 ? (
+        <EmptyState
+          title="No patents found"
+          description={search || selectedDomain ? "Try different search terms or clear filters." : "The patent database appears to be empty. Please seed it."}
+          actionLabel={search || selectedDomain ? "Clear Filters" : null}
+          onAction={search || selectedDomain ? () => { setSearch(''); setSelectedDomain(''); } : undefined}
+          icon={BookOpen}
+        />
+      ) : (
+        <DataTable
+          columns={columns}
+          data={patents}
+          emptyMessage="No patent publications found matching query."
+        />
+      )}
 
     </div>
   );

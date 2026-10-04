@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { get, all, run } = require('../db/database');
 const { authenticateToken } = require('./auth');
+const { logActivity } = require('../utils/logger');
 
 // Middleware to verify Administrator privileges
 const verifyAdmin = async (req, res, next) => {
@@ -27,32 +28,46 @@ router.get('/stats', authenticateToken, verifyAdmin, async (req, res) => {
     const usersCount = await get("SELECT COUNT(*) as count FROM users");
     const scansCount = await get("SELECT COUNT(*) as count FROM analysis_history");
     const avgNovelty = await get("SELECT AVG(novelty_score) as avg FROM analysis_history");
-    
-    // User growth projection
-    const userGrowth = [
-      { date: "Jul 28", count: Math.max(1, usersCount.count - 4) },
-      { date: "Jul 30", count: Math.max(1, usersCount.count - 2) },
-      { date: "Aug 01", count: Math.max(1, usersCount.count - 1) },
-      { date: "Aug 04", count: usersCount.count }
-    ];
 
-    // Search activity projection
-    const searchTrends = [
-      { date: "Mon", count: 3 },
-      { date: "Tue", count: 7 },
-      { date: "Wed", count: 5 },
-      { date: "Thu", count: 8 },
-      { date: "Fri", count: 12 },
-      { date: "Sat", count: 4 },
-      { date: "Sun", count: scansCount.count }
-    ];
+    // Real user growth: registrations per day for the last 7 days
+    const userGrowthRows = await all(`
+      SELECT DATE(created_at) as date, COUNT(*) as count
+      FROM users
+      WHERE created_at >= DATE('now', '-6 days')
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC
+    `);
+
+    // Real search activity: scans per day for the last 7 days
+    const searchTrendRows = await all(`
+      SELECT DATE(created_at) as date, COUNT(*) as count
+      FROM analysis_history
+      WHERE created_at >= DATE('now', '-6 days')
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC
+    `);
+
+    // Build a 7-day map (fill missing days with 0)
+    const buildDayMap = (rows) => {
+      const map = {};
+      rows.forEach(r => { map[r.date] = r.count; });
+      const result = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = d.toISOString().split('T')[0];
+        const label = d.toLocaleDateString('en-US', { weekday: 'short' });
+        result.push({ date: label, count: map[key] || 0 });
+      }
+      return result;
+    };
 
     res.json({
       totalUsers: usersCount.count,
       totalSearches: scansCount.count,
       avgNovelty: avgNovelty.avg ? Math.round(avgNovelty.avg) : 0,
-      userGrowth,
-      searchTrends
+      userGrowth: buildDayMap(userGrowthRows),
+      searchTrends: buildDayMap(searchTrendRows)
     });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Internal server error' });
@@ -77,30 +92,80 @@ router.put('/users/:id/role', authenticateToken, verifyAdmin, async (req, res) =
   }
   try {
     await run("UPDATE users SET role = ? WHERE id = ?", [role, req.params.id]);
+    await logActivity('INFO', `User ID ${req.params.id} role updated to '${role}' by admin ID ${req.user.id}.`, req.user.id);
     res.json({ success: true, message: `User role successfully updated to ${role}.` });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update user role.' });
   }
 });
 
-// Access simulated activity logs
+// Delete a user
+router.delete('/users/:id', authenticateToken, verifyAdmin, async (req, res) => {
+  try {
+    if (parseInt(req.params.id) === req.user.id) {
+      return res.status(400).json({ error: 'Cannot delete your own account from admin panel.' });
+    }
+    await run("DELETE FROM analysis_history WHERE user_id = ?", [req.params.id]);
+    await run("DELETE FROM saved_patents WHERE user_id = ?", [req.params.id]);
+    await run("DELETE FROM users WHERE id = ?", [req.params.id]);
+    await logActivity('WARNING', `User ID ${req.params.id} deleted by admin ID ${req.user.id}.`, req.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete user.' });
+  }
+});
+
+// Real activity logs from DB (last 50 entries)
 router.get('/logs', authenticateToken, verifyAdmin, async (req, res) => {
-  const mockLogs = [
-    { timestamp: new Date(Date.now() - 50000).toISOString(), level: "INFO", message: "User authentication token issued successfully" },
-    { timestamp: new Date(Date.now() - 300000).toISOString(), level: "INFO", message: "SQLite seeded with 10 reference patents successfully" },
-    { timestamp: new Date(Date.now() - 600000).toISOString(), level: "WARNING", message: "Python similarity engine offline, falling back to local JS matching" },
-    { timestamp: new Date(Date.now() - 900000).toISOString(), level: "INFO", message: "Server connection established on port 5000" }
-  ];
-  res.json(mockLogs);
+  try {
+    const logs = await all(
+      "SELECT level, message, created_at as timestamp FROM activity_logs ORDER BY created_at DESC LIMIT 50"
+    );
+
+    // Seed some startup logs if table is empty
+    if (logs.length === 0) {
+      const staticLogs = [
+        { timestamp: new Date(Date.now() - 50000).toISOString(), level: "INFO", message: "User authentication token issued successfully" },
+        { timestamp: new Date(Date.now() - 300000).toISOString(), level: "INFO", message: "SQLite seeded with reference patents successfully" },
+        { timestamp: new Date(Date.now() - 600000).toISOString(), level: "WARNING", message: "Python similarity engine offline, falling back to local JS TF-IDF matching" },
+        { timestamp: new Date(Date.now() - 900000).toISOString(), level: "INFO", message: "Server connection established on port 5000" }
+      ];
+      return res.json(staticLogs);
+    }
+
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch activity logs.' });
+  }
 });
 
-// Simulated feedback logs
+// Feedback: stored in activity_logs with level='FEEDBACK' (real persistence)
 router.get('/feedback', authenticateToken, verifyAdmin, async (req, res) => {
-  const mockFeedback = [
-    { id: 1, name: "David K.", email: "david@mit.edu", text: "The accuracy for machine learning matching is phenomenal! Saved us hours of prior-art reading.", rating: 5 },
-    { id: 2, name: "Sarah L.", email: "sarah@lawgroup.com", text: "Downloadable PDF reports format clean. Can you add claims highlighting indicators next?", rating: 4 }
-  ];
-  res.json(mockFeedback);
+  try {
+    const feedbackRows = await all(
+      "SELECT id, message, created_at FROM activity_logs WHERE level = 'FEEDBACK' ORDER BY created_at DESC LIMIT 20"
+    );
+    res.json(feedbackRows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch feedback.' });
+  }
 });
 
-module.exports = router;
+// Submit feedback (any authenticated user)
+router.post('/feedback', authenticateToken, async (req, res) => {
+  const { message } = req.body;
+  if (!message || message.trim().length < 5) {
+    return res.status(400).json({ error: 'Feedback message is required (min 5 chars).' });
+  }
+  try {
+    await run(
+      "INSERT INTO activity_logs (level, message, user_id) VALUES ('FEEDBACK', ?, ?)",
+      [message.trim(), req.user.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to submit feedback.' });
+  }
+});
+
+module.exports = { router };

@@ -70,6 +70,30 @@ function createTables(resolve, reject) {
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (closest_patent_id) REFERENCES patents(id)
       )
+    `);
+
+    // Create saved_patents table (user bookmarks)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS saved_patents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        patent_id INTEGER NOT NULL,
+        saved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (patent_id) REFERENCES patents(id),
+        UNIQUE(user_id, patent_id)
+      )
+    `);
+
+    // Create activity_logs table (real system event log)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        level TEXT NOT NULL DEFAULT 'INFO',
+        message TEXT NOT NULL,
+        user_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
     `, (err) => {
       if (err) reject(err);
       else {
