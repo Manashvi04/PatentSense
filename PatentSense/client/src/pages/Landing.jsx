@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Button from '../components/Button';
 import Card from '../components/Card';
-import { Sparkles, Cpu, ArrowRight, ShieldCheck, Activity, HelpCircle, FileText } from 'lucide-react';
+import { Sparkles, Cpu, ArrowRight, ShieldCheck, Activity, HelpCircle } from 'lucide-react';
 
 export default function Landing() {
   const [activeFaq, setActiveFaq] = useState(null);

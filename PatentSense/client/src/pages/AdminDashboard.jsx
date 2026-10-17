@@ -1,19 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import AreaChart from '../components/AreaChart';
 import Card from '../components/Card';
 import ScoreCard from '../components/ScoreCard';
 import DataTable from '../components/DataTable';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
 import Toast from '../components/Toast';
-import { ShieldCheck, Users, Activity, FileText, CheckCircle, AlertOctagon, CornerDownRight, MessageSquare } from 'lucide-react';
+import { ShieldCheck, Users, Activity, FileText, CheckCircle, Trash2, MessageSquare } from 'lucide-react';
+import { adminAPI } from '../utils/api';
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ user }) {
   const [stats, setStats] = useState(null);
   const [users, setUsers] = useState([]);
   const [logs, setLogs] = useState([]);
   const [feedback, setFeedback] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busyUserId, setBusyUserId] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
 
   useEffect(() => {
@@ -21,43 +23,48 @@ export default function AdminDashboard() {
   }, []);
 
   async function loadAdminData() {
+    setError('');
     try {
-      const token = localStorage.getItem('token');
-      const [statsRes, usersRes, logsRes, feedbackRes] = await Promise.all([
-        fetch('/api/admin/stats', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/admin/users', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/admin/logs', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/admin/feedback', { headers: { 'Authorization': `Bearer ${token}` } })
+      const [statsData, usersData, logsData, feedbackData] = await Promise.all([
+        adminAPI.getStats(), adminAPI.getUsers(), adminAPI.getLogs(), adminAPI.getFeedback(),
       ]);
-
-      if (statsRes.ok) {
-        setStats(await statsRes.json());
-        setUsers(await usersRes.json());
-        setLogs(await logsRes.json());
-        setFeedback(await feedbackRes.json());
-      }
+      setStats(statsData);
+      setUsers(usersData);
+      setLogs(logsData);
+      setFeedback(feedbackData);
     } catch (err) {
-      console.error("Admin fetch notice:", err);
+      setError(err.message || 'Could not load administrator data.');
     } finally {
       setLoading(false);
     }
   }
 
-  const sampleUsers = users.length > 0 ? users : [
-    { id: 1, full_name: "Dr. Eleanor Vance", email: "evance@lawfirm.com", role: "admin", created_at: "2026-01-10" },
-    { id: 2, full_name: "Marcus Thorne", email: "mthorne@techcorp.com", role: "user", created_at: "2026-02-14" },
-    { id: 3, full_name: "Sarah Lin", email: "slin@bioresearch.org", role: "user", created_at: "2026-03-01" }
-  ];
-
-  const sampleLogs = logs.length > 0 ? logs : [
-    { timestamp: new Date().toISOString(), level: "INFO", message: "System scan pipeline vector embedding generation complete." },
-    { timestamp: new Date().toISOString(), level: "INFO", message: "User session authenticated: evance@lawfirm.com" }
-  ];
-
-  const handleRoleToggle = (userId, currentRole) => {
+  const handleRoleToggle = async (userId, currentRole) => {
     const targetRole = currentRole === 'admin' ? 'user' : 'admin';
-    setUsers(sampleUsers.map(u => u.id === userId ? { ...u, role: targetRole } : u));
-    setToastMsg(`User role updated to ${targetRole}.`);
+    setBusyUserId(userId);
+    try {
+      await adminAPI.updateRole(userId, targetRole);
+      setUsers((items) => items.map((item) => item.id === userId ? { ...item, role: targetRole } : item));
+      setToastMsg(`User role updated to ${targetRole}.`);
+    } catch (err) {
+      setToastMsg(err.message || 'Could not update this user role.');
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
+  const handleDeleteUser = async (row) => {
+    if (!window.confirm(`Delete ${row.email} and their saved patents and reports? This cannot be undone.`)) return;
+    setBusyUserId(row.id);
+    try {
+      await adminAPI.deleteUser(row.id);
+      setUsers((items) => items.filter((item) => item.id !== row.id));
+      setToastMsg('User and associated data deleted.');
+    } catch (err) {
+      setToastMsg(err.message || 'Could not delete this user.');
+    } finally {
+      setBusyUserId(null);
+    }
   };
 
   const userColumns = [
@@ -85,9 +92,10 @@ export default function AdminDashboard() {
       header: 'Action',
       cellClassName: 'text-right',
       accessor: (row) => (
-        <Button variant="outline" size="sm" onClick={() => handleRoleToggle(row.id, row.role)}>
-          Toggle Role
-        </Button>
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="outline" size="sm" disabled={row.id === user?.id || busyUserId === row.id} onClick={() => handleRoleToggle(row.id, row.role)}>{row.role === 'admin' ? 'Make User' : 'Make Admin'}</Button>
+          <Button variant="danger" size="sm" disabled={row.id === user?.id || busyUserId === row.id} icon={Trash2} onClick={() => handleDeleteUser(row)}>Delete</Button>
+        </div>
       )
     }
   ];
@@ -109,24 +117,24 @@ export default function AdminDashboard() {
 
       {/* Metrics Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <ScoreCard title="TOTAL ACTIVE USERS" value={stats?.totalUsers || "142"} icon={Users} />
-        <ScoreCard title="TOTAL SCANS RUN" value={stats?.totalSearches || "1,248"} icon={Activity} />
-        <ScoreCard title="AVG NOVELTY RATING" value={`${stats?.avgNovelty || 82}%`} icon={CheckCircle} />
-        <ScoreCard title="REFERENCE PATENTS" value="10,000+" icon={FileText} />
+        <ScoreCard title="TOTAL ACTIVE USERS" value={stats?.totalUsers ?? 0} icon={Users} />
+        <ScoreCard title="TOTAL SCANS RUN" value={stats?.totalSearches ?? 0} icon={Activity} />
+        <ScoreCard title="AVG NOVELTY RATING" value={`${stats?.avgNovelty ?? 0}%`} icon={CheckCircle} />
+        <ScoreCard title="REFERENCE PATENTS" value={stats?.referencePatents ?? 0} icon={FileText} />
       </div>
 
       {/* Grid of Users & Logs */}
       <div className="grid lg:grid-cols-3 gap-8 items-start">
         <div className="lg:col-span-2 space-y-4">
           <h3 className="font-display font-bold text-xl text-white">Registered User Directory</h3>
-          <DataTable columns={userColumns} data={sampleUsers} />
+          {error ? <div role="alert" className="rounded-xl border border-[#EF4444]/30 bg-[#EF4444]/10 p-4 text-sm text-[#FCA5A5]">{error}<button className="ml-3 underline" onClick={loadAdminData}>Retry</button></div> : loading ? <p className="text-sm text-[#A3A3A3]">Loading administrator data…</p> : <DataTable columns={userColumns} data={users} emptyMessage="No registered users." />}
         </div>
 
         <div className="space-y-6">
           <Card className="p-6 space-y-4">
             <h3 className="font-display font-bold text-base text-white border-b border-[#262626] pb-3">Access Logs</h3>
             <div className="space-y-3 max-h-[260px] overflow-y-auto pr-1">
-              {sampleLogs.map((log, i) => (
+              {logs.map((log, i) => (
                 <div className="space-y-1 text-xs" key={i}>
                   <div className="flex justify-between items-center text-[10px] font-bold text-[#A3A3A3]">
                     <span>[{log.level}]</span>
@@ -138,6 +146,10 @@ export default function AdminDashboard() {
                 </div>
               ))}
             </div>
+          </Card>
+          <Card className="p-6 space-y-4">
+            <h3 className="font-display font-bold text-base text-white border-b border-[#262626] pb-3 flex items-center gap-2"><MessageSquare className="w-4 h-4" />User Feedback</h3>
+            {feedback.length ? <div className="space-y-3 max-h-[220px] overflow-y-auto">{feedback.map((item) => <p key={item.id} className="text-xs text-[#A3A3A3] border-l border-[#404040] pl-3">{item.message}<span className="block mt-1 text-[10px] text-[#666]">{new Date(item.created_at).toLocaleString()}</span></p>)}</div> : <p className="text-xs text-[#666]">No feedback submitted.</p>}
           </Card>
         </div>
       </div>

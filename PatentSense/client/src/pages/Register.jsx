@@ -4,7 +4,7 @@ import { authAPI } from '../utils/api';
 import Input from '../components/Input';
 import Button from '../components/Button';
 import Toast from '../components/Toast';
-import { Sparkles, Mail, Lock, User, Building, Check, ArrowRight } from 'lucide-react';
+import { Sparkles, Mail, Lock, User, Building } from 'lucide-react';
 
 export default function Register({ setUser }) {
   const [fullName, setFullName] = useState('');

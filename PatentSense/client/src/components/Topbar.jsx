@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useLocation, Link, useNavigate } from 'react-router-dom';
-import { Search, Plus, Bell, User, CheckCircle2 } from 'lucide-react';
+import { Search, Plus, Bell, CheckCircle2 } from 'lucide-react';
 import Button from './Button';
 
 export default function Topbar({ user }) {
@@ -81,7 +81,7 @@ export default function Topbar({ user }) {
         {location.pathname !== '/new-analysis' && location.pathname !== '/search' && (
           <Link to="/new-analysis">
             <Button variant="primary" size="sm" icon={Plus}>
-              + New Patent Analysis
+              New Patent Analysis
             </Button>
           </Link>
         )}

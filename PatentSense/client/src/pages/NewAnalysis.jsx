@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Input from '../components/Input';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import Toast from '../components/Toast';
-import { Upload, FileText, X, Plus, Sparkles, Tag, CheckCircle2 } from 'lucide-react';
+import { analysisAPI } from '../utils/api';
+import { Upload, X, Plus, Sparkles, Tag, CheckCircle2 } from 'lucide-react';
 
 export default function NewAnalysis() {
   const [activeTab, setActiveTab] = useState('form'); // 'form' or 'upload'
@@ -20,10 +21,19 @@ export default function NewAnalysis() {
 
   // Option A File State
   const [uploadedFile, setUploadedFile] = useState(null);
+  const [extracting, setExtracting] = useState(false);
+  const [sourceDocument, setSourceDocument] = useState(null);
   
   const [error, setError] = useState('');
   const [toastMsg, setToastMsg] = useState('');
+  const location = useLocation();
   const navigate = useNavigate();
+
+  React.useEffect(() => {
+    if (typeof location.state?.initialTitle === 'string') {
+      setTitle(location.state.initialTitle.slice(0, 300));
+    }
+  }, [location.state]);
 
   const domains = [
     "Artificial Intelligence",
@@ -68,53 +78,79 @@ export default function NewAnalysis() {
     const ext = file.name.split('.').pop().toLowerCase();
     if (!['pdf', 'docx', 'txt'].includes(ext)) {
       setError("Supported file formats are PDF, DOCX, and TXT.");
+      setUploadedFile(null);
+      setSourceDocument(null);
+      return;
+    }
+    if (!file.size) {
+      setError('The selected file is empty.');
+      setUploadedFile(null);
+      setSourceDocument(null);
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setError('The maximum upload size is 25 MB.');
+      setUploadedFile(null);
+      setSourceDocument(null);
       return;
     }
     setError('');
     setUploadedFile(file);
+    setSourceDocument(null);
     setToastMsg(`Uploaded file: ${file.name}`);
   };
 
-  const handleSubmit = (e) => {
+  const handleExtract = async () => {
+    if (!uploadedFile) {
+      setError('Choose a PDF, DOCX, or TXT file first.');
+      return;
+    }
+    setExtracting(true);
+    setError('');
+    try {
+      const extracted = await analysisAPI.extractDocument(uploadedFile);
+      const sections = extracted.sections || {};
+      setTitle(uploadedFile.name.replace(/\.[^/.]+$/, ''));
+      setAbstract(sections.abstract || '');
+      setClaims(sections.claims || '');
+      setDescription(sections.description || extracted.text);
+      setSourceDocument({ filename: extracted.filename, fileType: extracted.fileType, text: extracted.text });
+      setActiveTab('form');
+      setToastMsg(`Extracted ${extracted.characters.toLocaleString()} characters. Review the fields before analysis.`);
+    } catch (extractError) {
+      setError(extractError.message || 'Could not extract text from this document.');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
 
     if (activeTab === 'upload') {
-      if (!uploadedFile) {
-        setError("Please upload a patent document (PDF, DOCX, TXT).");
-        return;
-      }
-      // Pass file details to pipeline
-      navigate('/pipeline', {
-        state: {
-          title: uploadedFile.name.replace(/\.[^/.]+$/, ""),
-          abstract: `Extracted disclosures from uploaded file: ${uploadedFile.name}`,
-          description: `Full document contents parsed from file of size ${(uploadedFile.size / 1024).toFixed(1)} KB.`,
-          technologyDomain: "Uploaded Document Analysis",
-          keywords: ["Document Upload", "Parsed PDF"]
-        }
-      });
+      await handleExtract();
       return;
     }
 
-    // Option B Form Submission
     if (!title.trim()) {
       setError("Patent Title is required.");
       return;
     }
-    if (!abstract.trim() && !description.trim()) {
-      setError("Please provide an Abstract or Description for novelty evaluation.");
+    if (!abstract.trim() || !description.trim() || !claims.trim()) {
+      setError('Abstract, claims, and detailed description are required. Review the extracted fields or complete them manually.');
       return;
     }
 
     navigate('/pipeline', {
       state: {
         title,
-        abstract: abstract || description.slice(0, 250),
+        abstract,
         claims,
-        description: description || abstract,
+        description,
         technologyDomain: domain,
-        keywords
+        keywords,
+        sourceDocument,
       }
     });
   };
@@ -167,10 +203,21 @@ export default function NewAnalysis() {
               </label>
 
               <div
+                onClick={(e) => {
+                  if (e.target.closest('button, input')) return;
+                  e.currentTarget.querySelector('input[type="file"]')?.click();
+                }}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={handleFileDrop}
                 className="border-2 border-dashed border-[#404040] hover:border-white bg-[#0A0A0A] rounded-2xl p-12 text-center transition-all flex flex-col items-center justify-center gap-3 cursor-pointer group"
               >
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.txt"
+                  onChange={handleFileSelect}
+                  className="sr-only"
+                  aria-label="Choose a patent document"
+                />
                 <div className="w-12 h-12 rounded-2xl bg-[#1A1A1A] border border-[#404040] flex items-center justify-center text-white group-hover:scale-110 transition-transform">
                   <Upload className="w-6 h-6" />
                 </div>
@@ -186,7 +233,7 @@ export default function NewAnalysis() {
                     </p>
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); setUploadedFile(null); }}
+                      onClick={(e) => { e.stopPropagation(); setUploadedFile(null); setSourceDocument(null); }}
                       className="text-xs font-bold text-[#EF4444] hover:underline mt-2 inline-flex items-center gap-1"
                     >
                       <X className="w-3.5 h-3.5" /> Remove file
@@ -198,12 +245,6 @@ export default function NewAnalysis() {
                     <p className="text-xs text-[#666666]">Supports PDF, DOCX, or TXT (Max 25MB)</p>
                     <div className="pt-2">
                       <label className="inline-block">
-                        <input
-                          type="file"
-                          accept=".pdf,.docx,.txt"
-                          onChange={handleFileSelect}
-                          className="hidden"
-                        />
                         <span className="px-4 py-2 rounded-xl bg-white text-black font-bold text-xs cursor-pointer hover:bg-[#E5E5E5] transition-all">
                           Browse Files
                         </span>
@@ -217,11 +258,17 @@ export default function NewAnalysis() {
         ) : (
           /* OPTION B — ENTER PATENT INFORMATION */
           <Card className="space-y-6 p-8">
+            {sourceDocument && (
+              <div className="rounded-xl border border-[#10B981]/30 bg-[#10B981]/10 p-3 text-xs text-[#A3A3A3]">
+                Extracted from <span className="font-semibold text-white">{sourceDocument.filename}</span> ({sourceDocument.fileType}). Review and edit the extracted fields below before submitting.
+              </div>
+            )}
             <Input
               label="Patent Title"
               placeholder="e.g. AI-Based Autonomous Medical Imaging Diagnostic System"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              maxLength={300}
               required
             />
 
@@ -282,6 +329,8 @@ export default function NewAnalysis() {
               placeholder="Provide a concise 150-250 word summary of the technical invention..."
               value={abstract}
               onChange={(e) => setAbstract(e.target.value)}
+              maxLength={50000}
+              required
             />
 
             <Input
@@ -291,6 +340,8 @@ export default function NewAnalysis() {
               placeholder="Specify primary independent claims (e.g., Claim 1: A system comprising a neural network controller configured to...)"
               value={claims}
               onChange={(e) => setClaims(e.target.value)}
+              maxLength={100000}
+              required
             />
 
             <Input
@@ -300,14 +351,16 @@ export default function NewAnalysis() {
               placeholder="Outline structural layers, algorithmic processes, signal frequencies, sensor configurations, or mechanical operations in detail..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              maxLength={500000}
+              required
             />
           </Card>
         )}
 
         {/* Primary CTA */}
         <div className="pt-2">
-          <Button type="submit" variant="primary" size="lg" icon={Sparkles} className="w-full">
-            Run AI Analysis
+          <Button type="submit" variant="primary" size="lg" icon={activeTab === 'upload' ? Upload : Sparkles} className="w-full" loading={extracting}>
+            {activeTab === 'upload' ? 'Extract Document Text' : 'Run AI Analysis'}
           </Button>
         </div>
       </form>

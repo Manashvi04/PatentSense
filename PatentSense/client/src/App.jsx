@@ -8,6 +8,7 @@ import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 
 import Dashboard from './pages/Dashboard';
 import NewAnalysis from './pages/NewAnalysis';
@@ -51,12 +52,23 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check user authentication credentials on initial mount
-    const storedUser = authAPI.getUser();
-    if (storedUser && authAPI.isAuthenticated()) {
-      setUser(storedUser);
-    }
-    setLoading(false);
+    let active = true;
+    const restoreSession = async () => {
+      if (!authAPI.isAuthenticated()) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const data = await authAPI.getMe();
+        if (active) setUser(data.user);
+      } catch {
+        authAPI.logout();
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    restoreSession();
+    return () => { active = false; };
   }, []);
 
   if (loading) {
@@ -89,6 +101,7 @@ export default function App() {
           path="/forgot-password"
           element={user ? <Navigate to="/dashboard" replace /> : <ForgotPassword />}
         />
+        <Route path="/reset-password" element={<ResetPassword setUser={setUser} />} />
 
         {/* Protected Dashboard/Console Views */}
         <Route
@@ -206,9 +219,11 @@ export default function App() {
         <Route
           path="/admin"
           element={
-            <ConsoleShell user={user} setUser={setUser}>
-              <AdminDashboard />
-            </ConsoleShell>
+            user?.role === 'admin' ? (
+              <ConsoleShell user={user} setUser={setUser}>
+              <AdminDashboard user={user} />
+              </ConsoleShell>
+            ) : user ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />
           }
         />
 

@@ -14,6 +14,8 @@ export default function ReportsModule() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [toastMsg, setToastMsg] = useState('');
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState(null);
 
   useEffect(() => {
     async function loadReports() {
@@ -21,7 +23,7 @@ export default function ReportsModule() {
         const data = await analysisAPI.getHistory();
         setReports(data || []);
       } catch (err) {
-        console.error("Failed to load reports:", err);
+        setError(err.message || 'Failed to load reports.');
       } finally {
         setLoading(false);
       }
@@ -29,16 +31,48 @@ export default function ReportsModule() {
     loadReports();
   }, []);
 
-  const handleShare = (id) => {
-    navigator.clipboard.writeText(`${window.location.origin}/analysis/${id}`);
-    setToastMsg("Report URL copied to clipboard.");
+  const handleShare = async (id) => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/analysis/${id}`);
+      setToastMsg('Report URL copied to clipboard.');
+    } catch {
+      setToastMsg('Could not copy the report URL.');
+    }
   };
 
-  const handleDelete = (id, e) => {
+  const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+
+  const handleDownload = async (id) => {
+    setBusyId(id);
+    try {
+      const report = await analysisAPI.getRecord(id);
+      const matches = (report.topMatches || []).map((match) => `<tr><td>${escapeHtml(match.patent_number)}</td><td>${escapeHtml(match.title)}</td><td>${Number(match.similarity) || 0}%</td></tr>`).join('');
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(report.title)} — PatentSense report</title><style>body{font:15px/1.6 Arial,sans-serif;max-width:900px;margin:40px auto;padding:0 24px;color:#222}h1,h2{color:#102a43}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #ddd}pre{white-space:pre-wrap}</style></head><body><h1>${escapeHtml(report.title)}</h1><p>Generated ${escapeHtml(new Date(report.created_at).toLocaleString())} · ${escapeHtml(report.technologyDomain || '')}</p><h2>Screening results</h2><p>Novelty screening index: ${Number(report.noveltyScore) || 0}% · Highest similarity: ${Number(report.similarityPercentage) || 0}%</p><p>${escapeHtml(report.noveltyGuidance || '')}</p><p>${escapeHtml(report.aiSummary || '')}</p><h2>Abstract</h2><pre>${escapeHtml(report.abstract)}</pre><h2>Claims</h2><pre>${escapeHtml(report.claims)}</pre><h2>Detailed description</h2><pre>${escapeHtml(report.description)}</pre><h2>Closest references</h2><table><thead><tr><th>Patent</th><th>Title</th><th>Similarity</th></tr></thead><tbody>${matches || '<tr><td colspan="3">No matching references recorded.</td></tr>'}</tbody></table><p><small>This automated similarity report is a research aid, not a legal opinion or patentability determination.</small></p></body></html>`;
+      const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `patentsense-report-${id}.html`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setToastMsg(err.message || 'Could not download this report.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDelete = async (id, e) => {
     e.preventDefault();
-    if (window.confirm("Are you sure you want to delete this report?")) {
-      setReports(reports.filter(r => r.id !== id));
-      setToastMsg("Report deleted.");
+    if (window.confirm('Are you sure you want to delete this report?')) {
+      try {
+        await analysisAPI.deleteRecord(id);
+        setReports((items) => items.filter((report) => report.id !== id));
+        setToastMsg('Report deleted.');
+      } catch (err) {
+        setToastMsg(err.message || 'Could not delete this report.');
+      }
     }
   };
 
@@ -46,33 +80,6 @@ export default function ReportsModule() {
     r.title.toLowerCase().includes(search.toLowerCase()) ||
     (r.technology_domain && r.technology_domain.toLowerCase().includes(search.toLowerCase()))
   );
-
-  const sampleReports = filteredReports.length > 0 ? filteredReports : [
-    {
-      id: "scan-101",
-      title: "AI-Based Medical Imaging Diagnostic System",
-      technology_domain: "AI / Healthcare",
-      novelty_score: 91,
-      status: "Completed",
-      created_at: "2026-08-14T10:00:00Z"
-    },
-    {
-      id: "scan-102",
-      title: "Smart Traffic Prediction Platform",
-      technology_domain: "AI / Transportation",
-      novelty_score: 78,
-      status: "Completed",
-      created_at: "2026-08-13T14:30:00Z"
-    },
-    {
-      id: "scan-103",
-      title: "Blockchain Authentication Method",
-      technology_domain: "Blockchain / Cyber Security",
-      novelty_score: 84,
-      status: "Completed",
-      created_at: "2026-08-12T09:15:00Z"
-    }
-  ];
 
   const columns = [
     {
@@ -115,7 +122,7 @@ export default function ReportsModule() {
               View
             </Button>
           </Link>
-          <Button variant="secondary" size="sm" icon={Download} onClick={() => window.print()}>
+          <Button variant="secondary" size="sm" icon={Download} loading={busyId === row.id} onClick={() => handleDownload(row.id)}>
             Download
           </Button>
           <button
@@ -163,11 +170,7 @@ export default function ReportsModule() {
         placeholder="Filter reports by title or domain..."
       />
 
-      <DataTable
-        columns={columns}
-        data={sampleReports}
-        emptyMessage="No reports found."
-      />
+      {error ? <div role="alert" className="rounded-xl border border-[#EF4444]/30 bg-[#EF4444]/10 p-4 text-sm text-[#FCA5A5]">{error}</div> : <DataTable columns={columns} data={filteredReports} emptyMessage="No reports found." />}
     </div>
   );
 }

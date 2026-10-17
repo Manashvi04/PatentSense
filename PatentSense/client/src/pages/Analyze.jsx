@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { analysisAPI } from '../utils/api';
-import { Activity, ArrowRight, ArrowLeft, Search } from 'lucide-react';
+import { ArrowRight, ArrowLeft, Search } from 'lucide-react';
 
 export default function Analyze() {
   const [step, setStep] = useState(1);

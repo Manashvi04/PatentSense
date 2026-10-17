@@ -5,21 +5,11 @@ const { authenticateToken } = require('./auth');
 const { logActivity } = require('../utils/logger');
 
 // Middleware to verify Administrator privileges
-const verifyAdmin = async (req, res, next) => {
-  try {
-    const user = await get("SELECT role FROM users WHERE id = ?", [req.user.id]);
-    if (!user || user.role !== 'admin') {
-      // In local environments, if there is only 1 user, let them pass as admin to prevent locking
-      const usersCount = await get("SELECT COUNT(*) as count FROM users");
-      if (usersCount.count <= 1) {
-        return next();
-      }
-      return res.status(403).json({ error: 'Access denied. Administrative access required.' });
-    }
-    next();
-  } catch (err) {
-    res.status(500).json({ error: 'Admin authorization check failed.' });
+const verifyAdmin = (req, res, next) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ code: 'ADMIN_REQUIRED', error: 'Access denied. Administrative access required.' });
   }
+  return next();
 };
 
 // Admin metrics & analytics
@@ -28,6 +18,7 @@ router.get('/stats', authenticateToken, verifyAdmin, async (req, res) => {
     const usersCount = await get("SELECT COUNT(*) as count FROM users");
     const scansCount = await get("SELECT COUNT(*) as count FROM analysis_history");
     const avgNovelty = await get("SELECT AVG(novelty_score) as avg FROM analysis_history");
+    const patentsCount = await get('SELECT COUNT(*) as count FROM patents');
 
     // Real user growth: registrations per day for the last 7 days
     const userGrowthRows = await all(`
@@ -65,6 +56,7 @@ router.get('/stats', authenticateToken, verifyAdmin, async (req, res) => {
     res.json({
       totalUsers: usersCount.count,
       totalSearches: scansCount.count,
+      referencePatents: patentsCount.count,
       avgNovelty: avgNovelty.avg ? Math.round(avgNovelty.avg) : 0,
       userGrowth: buildDayMap(userGrowthRows),
       searchTrends: buildDayMap(searchTrendRows)
@@ -87,12 +79,21 @@ router.get('/users', authenticateToken, verifyAdmin, async (req, res) => {
 // Update user role
 router.put('/users/:id/role', authenticateToken, verifyAdmin, async (req, res) => {
   const { role } = req.body;
+  const targetId = Number(req.params.id);
+  if (!Number.isSafeInteger(targetId) || targetId <= 0) return res.status(400).json({ error: 'Invalid user ID.' });
   if (!['user', 'admin'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role specified.' });
   }
   try {
-    await run("UPDATE users SET role = ? WHERE id = ?", [role, req.params.id]);
-    await logActivity('INFO', `User ID ${req.params.id} role updated to '${role}' by admin ID ${req.user.id}.`, req.user.id);
+    const target = await get('SELECT id, role FROM users WHERE id = ?', [targetId]);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    if (targetId === req.user.id && role !== 'admin') return res.status(400).json({ error: 'You cannot remove your own administrator role.' });
+    if (target.role === 'admin' && role !== 'admin') {
+      const admins = await get("SELECT COUNT(*) as count FROM users WHERE role = 'admin'");
+      if (admins.count <= 1) return res.status(409).json({ error: 'The last administrator cannot be demoted.' });
+    }
+    await run('UPDATE users SET role = ? WHERE id = ?', [role, targetId]);
+    await logActivity('INFO', `User ID ${targetId} role updated to '${role}' by admin ID ${req.user.id}.`, req.user.id);
     res.json({ success: true, message: `User role successfully updated to ${role}.` });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update user role.' });
@@ -101,14 +102,24 @@ router.put('/users/:id/role', authenticateToken, verifyAdmin, async (req, res) =
 
 // Delete a user
 router.delete('/users/:id', authenticateToken, verifyAdmin, async (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!Number.isSafeInteger(targetId) || targetId <= 0) return res.status(400).json({ error: 'Invalid user ID.' });
   try {
-    if (parseInt(req.params.id) === req.user.id) {
+    if (targetId === req.user.id) {
       return res.status(400).json({ error: 'Cannot delete your own account from admin panel.' });
     }
-    await run("DELETE FROM analysis_history WHERE user_id = ?", [req.params.id]);
-    await run("DELETE FROM saved_patents WHERE user_id = ?", [req.params.id]);
-    await run("DELETE FROM users WHERE id = ?", [req.params.id]);
-    await logActivity('WARNING', `User ID ${req.params.id} deleted by admin ID ${req.user.id}.`, req.user.id);
+    const target = await get('SELECT id, role FROM users WHERE id = ?', [targetId]);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    if (target.role === 'admin') {
+      const admins = await get("SELECT COUNT(*) as count FROM users WHERE role = 'admin'");
+      if (admins.count <= 1) return res.status(409).json({ error: 'The last administrator cannot be deleted.' });
+    }
+    await run('DELETE FROM password_reset_tokens WHERE user_id = ?', [targetId]);
+    await run('DELETE FROM analysis_history WHERE user_id = ?', [targetId]);
+    await run('DELETE FROM saved_patents WHERE user_id = ?', [targetId]);
+    await run('DELETE FROM activity_logs WHERE user_id = ?', [targetId]);
+    await run('DELETE FROM users WHERE id = ?', [targetId]);
+    await logActivity('WARNING', `User ID ${targetId} deleted by admin ID ${req.user.id}.`, req.user.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete user.' });
@@ -121,17 +132,6 @@ router.get('/logs', authenticateToken, verifyAdmin, async (req, res) => {
     const logs = await all(
       "SELECT level, message, created_at as timestamp FROM activity_logs ORDER BY created_at DESC LIMIT 50"
     );
-
-    // Seed some startup logs if table is empty
-    if (logs.length === 0) {
-      const staticLogs = [
-        { timestamp: new Date(Date.now() - 50000).toISOString(), level: "INFO", message: "User authentication token issued successfully" },
-        { timestamp: new Date(Date.now() - 300000).toISOString(), level: "INFO", message: "SQLite seeded with reference patents successfully" },
-        { timestamp: new Date(Date.now() - 600000).toISOString(), level: "WARNING", message: "Python similarity engine offline, falling back to local JS TF-IDF matching" },
-        { timestamp: new Date(Date.now() - 900000).toISOString(), level: "INFO", message: "Server connection established on port 5000" }
-      ];
-      return res.json(staticLogs);
-    }
 
     res.json(logs);
   } catch (err) {

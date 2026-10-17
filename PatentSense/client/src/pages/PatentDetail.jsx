@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link, useLocation } from 'react-router-dom';
+import { useParams, useLocation } from 'react-router-dom';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import Badge from '../components/Badge';
 import LoadingState from '../components/LoadingState';
-import { ArrowLeft, User, Calendar, Tag, ShieldCheck } from 'lucide-react';
+import { analysisAPI, savedPatentsAPI } from '../utils/api';
+import { ArrowLeft, User, Calendar, Tag, ShieldCheck, Bookmark } from 'lucide-react';
 
 export default function PatentDetail() {
   const { patentNumber } = useParams();
@@ -13,37 +14,42 @@ export default function PatentDetail() {
   
   const [patent, setPatent] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [isSaved, setIsSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     async function loadDetails() {
       try {
-        const token = localStorage.getItem('token');
-        const res = await fetch(`/api/analysis/patents?search=${patentNumber}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if (data.length > 0) {
-          setPatent(data[0]);
-        } else {
-          // Fallback sample patent
-          setPatent({
-            patent_number: patentNumber || "US12345678",
-            title: "Optical Coherence Tomography Processing Apparatus",
-            inventors: "Dr. Eleanor Vance, Mark Thorne",
-            filing_date: "2024-03-15",
-            category: "Biotechnology & Healthcare",
-            abstract: "An optical scanner apparatus comprising an image processor configured to acquire scan data and format two-dimensional tissue cross-sections.",
-            description: "Detailed system embodiment including multi-wavelength lasers, optical interferometers, and computational reconstruction logic."
-          });
-        }
+        const data = await analysisAPI.getPatents(patentNumber);
+        const found = data.find((item) => item.patent_number === patentNumber);
+        if (!found) throw new Error('This patent is not in the reference library.');
+        setPatent(found);
+        const saved = await savedPatentsAPI.check(found.id);
+        setIsSaved(saved.isSaved);
       } catch (err) {
-        console.error("Failed to load patent detailed claims:", err);
+        setError(err.message || 'Could not load patent details.');
       } finally {
         setLoading(false);
       }
     }
     loadDetails();
   }, [patentNumber]);
+
+  const toggleSaved = async () => {
+    if (!patent) return;
+    setSaving(true);
+    try {
+      if (isSaved) await savedPatentsAPI.delete(patent.id);
+      else await savedPatentsAPI.save(patent.id);
+      setIsSaved(!isSaved);
+    } catch (err) {
+      setActionError(err.message || 'Could not update saved status.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -53,11 +59,7 @@ export default function PatentDetail() {
     );
   }
 
-  const mockClaims = [
-    `1. A system for ${patent.title.toLowerCase()}, comprising a controller configured to parse and evaluate signal flows, an interface mapping data values, and a processor executing computational iterations to determine thresholds.`,
-    `2. The system of claim 1, wherein the controller aggregates data inputs from co-located thermal and moisture sensors in real-time.`,
-    `3. The system of claim 1, wherein the computational iterations execute progressive scaling models mapping vector bottlenecks.`
-  ];
+  if (error || !patent) return <div className="flex-1 p-8 text-[#D4D4D4]"><Button variant="outline" size="sm" icon={ArrowLeft} onClick={() => window.history.back()}>Back</Button><p role="alert" className="mt-6 text-sm text-[#FCA5A5]">{error || 'Patent not found.'}</p></div>;
 
   return (
     <div className="flex-1 p-8 bg-[#000000] text-[#D4D4D4] overflow-y-auto w-full max-w-5xl mx-auto space-y-8 select-none">
@@ -76,13 +78,15 @@ export default function PatentDetail() {
           <Badge variant="white" size="md">
             {patent.patent_number}
           </Badge>
+          <Button variant={isSaved ? 'primary' : 'outline'} size="sm" icon={Bookmark} loading={saving} onClick={toggleSaved}>{isSaved ? 'Saved' : 'Save Patent'}</Button>
         </div>
 
         <div className="flex flex-wrap gap-6 text-xs text-[#A3A3A3] font-medium">
-          <span className="flex items-center gap-1.5"><User className="w-4 h-4 text-white" /> Inventors: <strong className="text-white">{patent.inventors || 'Research Team'}</strong></span>
-          <span className="flex items-center gap-1.5"><Calendar className="w-4 h-4 text-white" /> Filing Date: <strong className="text-white">{patent.filing_date || '2024-03-15'}</strong></span>
-          <span className="flex items-center gap-1.5"><Tag className="w-4 h-4 text-white" /> Category: <strong className="text-white">{patent.category || 'AI Research'}</strong></span>
+          <span className="flex items-center gap-1.5"><User className="w-4 h-4 text-white" /> Inventors: <strong className="text-white">{patent.inventors || 'Not provided'}</strong></span>
+          <span className="flex items-center gap-1.5"><Calendar className="w-4 h-4 text-white" /> Filing Date: <strong className="text-white">{patent.filing_date || 'Not provided'}</strong></span>
+          <span className="flex items-center gap-1.5"><Tag className="w-4 h-4 text-white" /> Category: <strong className="text-white">{patent.category || 'Uncategorized'}</strong></span>
         </div>
+        {actionError && <p role="alert" className="text-sm text-[#FCA5A5]">{actionError}</p>}
       </div>
 
       {matchDetails && (
@@ -94,15 +98,15 @@ export default function PatentDetail() {
           <div className="flex gap-6 text-xs text-center font-bold font-display">
             <div>
               <span className="text-[#666666] text-[10px] block uppercase tracking-wider mb-0.5">Title Match</span>
-              <strong className="text-sm text-white">{matchDetails.similarities?.title || 80}%</strong>
+                <strong className="text-sm text-white">{matchDetails.similarities?.title ?? 0}%</strong>
             </div>
             <div>
               <span className="text-[#666666] text-[10px] block uppercase tracking-wider mb-0.5">Abstract Match</span>
-              <strong className="text-sm text-white">{matchDetails.similarities?.abstract || 82}%</strong>
+                <strong className="text-sm text-white">{matchDetails.similarities?.abstract ?? 0}%</strong>
             </div>
             <div>
               <span className="text-[#666666] text-[10px] block uppercase tracking-wider mb-0.5">Description Match</span>
-              <strong className="text-sm text-white">{matchDetails.similarities?.description || 75}%</strong>
+                <strong className="text-sm text-white">{matchDetails.similarities?.description ?? 0}%</strong>
             </div>
           </div>
         </Card>
@@ -117,13 +121,7 @@ export default function PatentDetail() {
 
           <Card className="p-6 space-y-3">
             <h3 className="font-semibold text-white text-base">Patent Claims</h3>
-            <div className="space-y-3">
-              {mockClaims.map((claim, idx) => (
-                <div className="p-4 rounded-xl border border-[#262626] bg-[#0A0A0A] text-xs text-[#D4D4D4] leading-relaxed font-mono" key={idx}>
-                  {claim}
-                </div>
-              ))}
-            </div>
+            <p className="text-sm text-[#A3A3A3]">The reference library does not include the published claims text for this patent.</p>
           </Card>
         </div>
 

@@ -5,7 +5,9 @@
   "scripts": {
     "server": "node server/server.js",
     "client": "npm run dev --prefix client",
-    "dev": "concurrently \"npm run server\" \"npm run client\""
+    "ai": "python ai_service/app.py",
+    "dev": "concurrently \"npm run server\" \"npm run client\" \"npm run ai\"",
+    "admin:promote": "node server/scripts/promote-admin.js"
   },
   "dependencies": {
     "concurrently": "^8.2.2"

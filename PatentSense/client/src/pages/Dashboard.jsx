@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { analysisAPI } from '../utils/api';
 import ScoreCard from '../components/ScoreCard';
 import AreaChart from '../components/AreaChart';
@@ -14,7 +14,6 @@ export default function Dashboard() {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [chartFilter, setChartFilter] = useState('30Days');
-  const navigate = useNavigate();
 
   useEffect(() => {
     async function loadDashboard() {
@@ -188,7 +187,7 @@ export default function Dashboard() {
         </div>
         <Link to="/new-analysis">
           <Button variant="primary" size="md" icon={Plus}>
-            + New Patent Analysis
+            New Patent Analysis
           </Button>
         </Link>
       </div>
@@ -241,11 +240,10 @@ export default function Dashboard() {
               <button
                 key={filterKey}
                 onClick={() => setChartFilter(filterKey)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  chartFilter === filterKey
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${chartFilter === filterKey
                     ? 'bg-white text-black font-bold'
                     : 'text-[#A3A3A3] hover:text-white'
-                }`}
+                  }`}
               >
                 {filterKey === '7Days' ? '7 Days' : filterKey === '30Days' ? '30 Days' : filterKey === '3Months' ? '3 Months' : '1 Year'}
               </button>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { authAPI } from '../utils/api';
 import Card from '../components/Card';
 import Input from '../components/Input';
@@ -12,10 +12,10 @@ export default function Settings({ user, setUser }) {
   const navigate = useNavigate();
   
   // Profile Section
-  const [fullName, setFullName] = useState(user?.fullName || 'Dr. Eleanor Vance');
-  const [email, setEmail] = useState(user?.email || 'evance@lawfirm.com');
-  const [organization, setOrganization] = useState(user?.organization || 'Vance IP Law');
-  const [role, setRole] = useState(user?.role || 'Patent Attorney');
+  const [fullName, setFullName] = useState(user?.fullName || '');
+  const [email, setEmail] = useState(user?.email || '');
+  const [organization, setOrganization] = useState(user?.organization || '');
+  const [role, setRole] = useState(user?.profession || 'Patent Researcher');
   
   // Security Section
   const [currentPassword, setCurrentPassword] = useState('');
@@ -23,38 +23,72 @@ export default function Settings({ user, setUser }) {
   const [twoFactor, setTwoFactor] = useState(false);
   
   // Preferences Section
-  const [emailNotifications, setEmailNotifications] = useState(true);
-  const [defaultDomain, setDefaultDomain] = useState('Artificial Intelligence');
+  const [emailNotifications, setEmailNotifications] = useState(user?.preferences?.notifications ?? true);
+  const [defaultDomain, setDefaultDomain] = useState(user?.preferences?.defaultDomain || 'Artificial Intelligence');
 
   // Modal / Toast
   const [toastMsg, setToastMsg] = useState('');
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [preferencesLoading, setPreferencesLoading] = useState(false);
+
+  useEffect(() => {
+    setFullName(user?.fullName || '');
+    setEmail(user?.email || '');
+    setOrganization(user?.organization || '');
+    setRole(user?.profession || 'Patent Researcher');
+    setEmailNotifications(user?.preferences?.notifications ?? true);
+    setDefaultDomain(user?.preferences?.defaultDomain || 'Artificial Intelligence');
+    setTwoFactor(user?.preferences?.twoFactor || false);
+  }, [user]);
 
   const handleProfileSave = async (e) => {
     e.preventDefault();
     setProfileLoading(true);
     try {
-      const updatedUser = { ...user, fullName, email, organization, role };
+      const response = await authAPI.updateProfile({ fullName, email, organization, profession: role });
+      const updatedUser = response.user;
       setUser(updatedUser);
       localStorage.setItem('user', JSON.stringify(updatedUser));
       setToastMsg("Profile details updated successfully.");
     } catch (err) {
       console.error(err);
+      setToastMsg(err.message || 'Could not save profile changes.');
     } finally {
       setProfileLoading(false);
     }
   };
 
-  const handlePasswordChange = (e) => {
+  const handlePasswordChange = async (e) => {
     e.preventDefault();
-    if (!currentPassword || !newPassword) {
-      setToastMsg("Please enter both current and new password.");
-      return;
+    try {
+      await authAPI.changePassword(currentPassword, newPassword);
+      setToastMsg("Password changed successfully.");
+      setCurrentPassword('');
+      setNewPassword('');
+    } catch (err) {
+      setToastMsg(err.message || 'Could not change password.');
     }
-    setToastMsg("Password changed successfully.");
-    setCurrentPassword('');
-    setNewPassword('');
+  };
+
+  const handlePreferencesSave = async (e) => {
+    e.preventDefault();
+    setPreferencesLoading(true);
+    try {
+      const response = await authAPI.updatePreferences({
+        notifications: emailNotifications,
+        defaultDomain,
+        twoFactor,
+      });
+      const updatedUser = { ...user, preferences: { ...user?.preferences, ...response.preferences } };
+      setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      setToastMsg('Preferences saved.');
+    } catch (err) {
+      setToastMsg(err.message || 'Could not save preferences.');
+    } finally {
+      setPreferencesLoading(false);
+    }
   };
 
   const handleLogout = () => {
@@ -201,7 +235,7 @@ export default function Settings({ user, setUser }) {
               <h3 className="font-display font-bold text-sm text-white">Preferences</h3>
             </div>
 
-            <div className="space-y-4 text-xs">
+            <form onSubmit={handlePreferencesSave} className="space-y-4 text-xs">
               <div className="flex items-center justify-between">
                 <span className="text-[#A3A3A3]">Email Analysis Alerts</span>
                 <input
@@ -226,7 +260,8 @@ export default function Settings({ user, setUser }) {
                   <option value="Green Energy & CleanTech">Green Energy & CleanTech</option>
                 </select>
               </div>
-            </div>
+              <Button type="submit" variant="primary" size="sm" loading={preferencesLoading}>Save Preferences</Button>
+            </form>
           </Card>
 
           {/* Section 4: Account Actions */}

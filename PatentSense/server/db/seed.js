@@ -138,17 +138,6 @@ async function seedDatabase() {
 const bcrypt = require('bcryptjs');
 const usersToSeed = [
   {
-    email: 'admin@example.com',
-    password_hash: bcrypt.hashSync('admin123', 10),
-    full_name: 'Admin User',
-    role: 'admin',
-    organization: 'PatentSense Corp',
-    research_interests: 'AI, Blockchain',
-    theme: 'dark',
-    notifications: 1,
-    language: 'en'
-  },
-  {
     email: 'user1@example.com',
     password_hash: bcrypt.hashSync('user1234', 10),
     full_name: 'John Doe',
@@ -171,7 +160,6 @@ async function seedAdditionalData() {
   }
 
   // Get a user id for sample relations
-  const admin = await get('SELECT id FROM users WHERE email = ?', ['admin@example.com']);
   const user1 = await get('SELECT id FROM users WHERE email = ?', ['user1@example.com']);
 
   // Seed saved patents for user1 (use first two patents)
@@ -183,27 +171,39 @@ async function seedAdditionalData() {
   }
 
   // Seed analysis_history for user1 (dummy analysis)
-  await run(`
-    INSERT INTO analysis_history (user_id, title, abstract, description, technology_domain, keywords, novelty_score, similarity_percentage, ai_summary, raw_results_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [
-    user1.id,
-    'Sample AI Patent Analysis',
-    'Analyzing AI novelty.',
-    'Detailed description of AI patent analysis.',
-    'Artificial Intelligence',
-    'AI, Machine Learning',
-    85,
-    70,
-    'Generated summary placeholder',
-    JSON.stringify({})
-  ]);
+  const sample = await get('SELECT id FROM analysis_history WHERE user_id = ? AND title = ?', [user1.id, 'Sample AI Patent Analysis']);
+  if (!sample) {
+    await run(`
+      INSERT INTO analysis_history (user_id, title, abstract, description, technology_domain, keywords, novelty_score, similarity_percentage, ai_summary, raw_results_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      user1.id,
+      'Sample AI Patent Analysis',
+      'Analyzing AI novelty.',
+      'Detailed description of AI patent analysis.',
+      'Artificial Intelligence',
+      JSON.stringify(['AI', 'Machine Learning']),
+      85,
+      70,
+      'Generated summary placeholder',
+      JSON.stringify({})
+    ]);
+  }
 
 }
 
 // Extend main seed function
 async function seedDatabase() {
   try {
+    // Roles assigned by the old first-registrant rule are not trusted grants.
+    // Run this once, then provision administrators explicitly with the local CLI.
+    const adminGrantMigration = await get("SELECT name FROM security_migrations WHERE name = 'remove_implicit_admin_grants_v1'");
+    if (!adminGrantMigration) {
+      await run("UPDATE users SET role = 'user' WHERE role = 'admin'");
+      await run("INSERT OR IGNORE INTO security_migrations (name) VALUES ('remove_implicit_admin_grants_v1')");
+      console.log('Removed legacy implicit administrator grants.');
+    }
+
     // Existing patent seeding logic
     const countRow = await get("SELECT COUNT(*) as count FROM patents");
     if (countRow.count > 0) {
@@ -228,10 +228,13 @@ async function seedDatabase() {
       console.log("Successfully seeded patents.");
     }
 
-    // Seed additional dummy data
-    console.log("Seeding dummy users, saved patents, and analysis history...");
-    await seedAdditionalData();
-    console.log("Dummy data seeding complete.");
+    // Sample accounts and placeholder history are for local demos only.
+    // Never create a known-password account or fake user records in production.
+    if (process.env.NODE_ENV !== 'production') {
+      console.log("Seeding local demo user, saved patents, and sample analysis history...");
+      await seedAdditionalData();
+      console.log("Local demo data seeding complete.");
+    }
   } catch (error) {
     console.error("Error seeding database:", error);
   }

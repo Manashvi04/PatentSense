@@ -2,21 +2,30 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Input from '../components/Input';
 import Button from '../components/Button';
+import { authAPI } from '../utils/api';
 import { Sparkles, Mail, ArrowLeft, CheckCircle2 } from 'lucide-react';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [developmentResetUrl, setDevelopmentResetUrl] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email) return;
     setLoading(true);
-    setTimeout(() => {
+    setError('');
+    try {
+      const response = await authAPI.requestPasswordReset(email);
+      setDevelopmentResetUrl(response.developmentResetUrl || '');
       setSent(true);
+    } catch (err) {
+      setError(err.message || 'Could not request a password reset.');
+    } finally {
       setLoading(false);
-    }, 800);
+    }
   };
 
   return (
@@ -41,17 +50,19 @@ export default function ForgotPassword() {
               <CheckCircle2 className="w-6 h-6" />
             </div>
             <div className="space-y-2">
-              <h3 className="font-semibold text-white">Check Your Email</h3>
+              <h3 className="font-semibold text-white">Password Reset Requested</h3>
               <p className="text-xs text-[#A3A3A3] leading-relaxed">
-                We sent password reset verification instructions to <strong className="text-white">{email}</strong>.
+                If an account exists for <strong className="text-white">{email}</strong>, reset instructions will be sent to its address.
               </p>
             </div>
+            {developmentResetUrl && <a className="inline-block text-xs font-bold text-white underline" href={developmentResetUrl}>Open development reset link</a>}
             <Link to="/login" className="inline-flex items-center justify-center gap-2 text-xs font-bold text-white hover:underline pt-2">
               <ArrowLeft className="w-3.5 h-3.5" /> Back to Login
             </Link>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
+            {error && <p role="alert" className="text-xs text-[#FCA5A5]">{error}</p>}
             <Input
               label="Email Address"
               type="email"

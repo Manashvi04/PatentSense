@@ -4,25 +4,38 @@ import Input from '../components/Input';
 import Button from '../components/Button';
 import Badge from '../components/Badge';
 import DataTable from '../components/DataTable';
-import { Search, Layers, Sparkles, ArrowRight } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { analysisAPI } from '../utils/api';
 export default function SimilaritySearch() {
   const [query, setQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [results, setResults] = useState(null);
+  const [error, setError] = useState('');
+  const [retrievalMethod, setRetrievalMethod] = useState('');
 
   const handleSearch = async (e) => {
     e.preventDefault();
     if (!query.trim()) return;
 
     setIsSearching(true);
+    setError('');
+    setResults(null);
+    setRetrievalMethod('');
     try {
       const data = await analysisAPI.searchSimilar(query);
-      setResults(data);
+      if (!Array.isArray(data.results)) throw new Error('The similarity service returned an unexpected response.');
+      setResults(data.results.map((item) => ({
+        ...item,
+        similarity: Number.isFinite(Number(item.similarity)) ? Math.max(0, Math.min(100, Number(item.similarity))) : 0,
+        technology: item.technology || item.category || 'Uncategorized',
+        publication_date: item.publication_date || item.filing_date || '—',
+        matching_concepts: Array.isArray(item.matching_concepts) ? item.matching_concepts : [],
+      })));
+      setRetrievalMethod(data.retrievalMethod || '');
     } catch (err) {
       console.error('Search error:', err);
-      setResults([]);
+      setError(err.message || 'Similarity search could not be completed.');
     } finally {
       setIsSearching(false);
     }
@@ -112,12 +125,14 @@ export default function SimilaritySearch() {
         </form>
       </Card>
 
+      {error && <div role="alert" className="rounded-xl border border-[#EF4444]/30 bg-[#EF4444]/10 p-4 text-sm text-[#FCA5A5]">{error}</div>}
+
       {/* Search Results */}
       {results && (
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="font-display font-bold text-xl text-white">Prior Art Similarity Matches</h3>
-            <span className="text-xs text-[#A3A3A3]">{results.length} references matched vector query</span>
+            <span className="text-xs text-[#A3A3A3]">{results.length} relevant references returned{retrievalMethod ? ` · ${retrievalMethod}` : ''}</span>
           </div>
 
           <DataTable

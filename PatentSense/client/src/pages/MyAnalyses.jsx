@@ -8,7 +8,7 @@ import Button from '../components/Button';
 import LoadingState from '../components/LoadingState';
 import EmptyState from '../components/EmptyState';
 import Toast from '../components/Toast';
-import { Plus, ExternalLink, Download, Trash2, Heart } from 'lucide-react';
+import { Plus, ExternalLink, Trash2 } from 'lucide-react';
 
 export default function MyAnalyses() {
   const [reports, setReports] = useState([]);
